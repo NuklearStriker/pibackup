@@ -83,14 +83,16 @@ if (( EUID != 0 )); then
 else
 	SERVER="$1"
 
-	#Usage checks
+	#Check the name of the server
 	if [[ -z "$SERVER" ]]; then
 		help
 	else
 		info "Backing up $SERVER"
 	fi
 	
+	#Generate Debug log file
 	if [ "$debug" = true ]; then
+		mkdir -p "${CURRENT_DIR}/log"
 		LOGFILE="${CURRENT_DIR}/log/$SERVER.$TIMESTAMP.log"
 		info "Creating log file $LOGFILE"
 		exec 1> >(stdbuf -i0 -o0 -e0 tee -a "$LOGFILE" >&1)
@@ -147,23 +149,24 @@ else
 	fi
 	
 	#Generate the backup script to execute on the Raspberry
+	mkdir -p "${CURRENT_DIR}/tmp"
 	temp_script=$(tempfile -d"${CURRENT_DIR}/tmp" -p"${SERVER}_")
 	
 	echo "bkp_dir=\$(mktemp -d)" > $temp_script
-	echo "echo \"TempDir for the backup is : \$bkp_dir\"" > $temp_script
+	echo "echo \"TempDir for the backup is : \$bkp_dir\"" >> $temp_script
 	echo "mount ${BACKUP_SERVER_IP}:${BACKUP_SERVER_DIR} \"\$bkp_dir\"" >> $temp_script
 	echo "echo \"${BACKUP_SERVER_IP}:${BACKUP_SERVER_DIR} mounted on \$bkp_dir\"" >> $temp_script
 	echo "mkdir -p \$bkp_dir/${SERVER}" >> $temp_script
-	echo "echo \"Backup in progress...\""
+	echo "echo \"Backup in progress...\"" >> $temp_script
 	echo "dd if=/dev/mmcblk0 of=\$bkp_dir/${SERVER}/${TIMESTAMP}.img bs=4M" >> $temp_script
 	echo "echo \"Backup completed!\"" >> $temp_script
 	echo "echo \"Cleaning...\"" >> $temp_script
 	echo "umount \"\$bkp_dir\"" >> $temp_script
-	echo "rmdir -f \"\$bkp_dir\"" >> $temp_script
+	echo "rmdir \"\$bkp_dir\"" >> $temp_script
 	
 	#Execute the backup script on the Raspberry
 	info "Starting backup"
-	cat $temp_script | ssh $SERVER /bin/bash >/dev/null
+	cat $temp_script | ssh $SERVER /bin/bash
 	rc=$?
 	if (( $rc != 0 )); then
 		error $LINENO "Backup error."
