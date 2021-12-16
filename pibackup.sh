@@ -1,7 +1,17 @@
 #!/bin/bash
 
-version="v0.1.0"
+version="v0.1.2"
+#Changelog
+# v0.1.0 : initial version
+# v0.1.1 : variabilize most parameters
+# v0.1.2 : add some comments
 
+#Modifiable parameters
+BACKUP_SERVER_DIR="/export/DATA/Backup"		#Directory on the backup server where you want to store the backup
+BACKUP_SERVER_INTERFACE="br0"				#Interface of the backup server used to do the backup to get the local ip
+PISHRINK_DIR="$(pwd)"
+
+#NOT modifiable parameters
 CURRENT_DIR="$(pwd)"
 SCRIPTNAME="${0##*/}"
 LICENSE="MIT License"
@@ -9,6 +19,7 @@ COPYRIGHT="Copyright (c) 2021 NuklearStriker"
 MYNAME="${SCRIPTNAME%.*}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 PISHRINK_OPTS=""
+BACKUP_SERVER_IP=$(/sbin/ip -o -4 addr list ${BACKUP_SERVER_INTERFACE} | awk '{print $4}' | cut -d/ -f1)
 
 function info() {
 	echo "$MYNAME: $1 ..."
@@ -82,12 +93,12 @@ else
 	if [ "$debug" = true ]; then
 		LOGFILE="${CURRENT_DIR}/log/$SERVER.$TIMESTAMP.log"
 		info "Creating log file $LOGFILE"
-		#rm "$LOGFILE" &>/dev/null
 		exec 1> >(stdbuf -i0 -o0 -e0 tee -a "$LOGFILE" >&1)
 		exec 2> >(stdbuf -i0 -o0 -e0 tee -a "$LOGFILE" >&2)
 	fi
 
-	ping_dest=$(ping -c4 $SERVER | grep "received" | cut -d ' ' -f 4)
+	#Check if the Raspberry is pingable
+	ping_dest=$(ping -c4 $SERVER | grep "received" | awk '{print $4}')
 	if [[ "$ping_dest" == "0" ]]; then
 		error $LINENO "Server not reachable"
 		exit 2
@@ -95,6 +106,7 @@ else
 		info "Server is reachable"
 	fi
 	
+	#Check if SSH port is open on the Raspberry
 	ssh_dest_port=$(nmap $SERVER -PN -p ssh | grep open)
 	if [[ -z "$ssh_dest_port" ]]; then
 		error $LINENO "SSH port on $SERVER is not open"
@@ -102,10 +114,11 @@ else
 	else
 		info "SSH port on $SERVER is open"
 	fi
-
+	
+	#Check if we can open a trusted SSH connection with the Raspberry
 	timeout 10s ssh -q $SERVER exit >/dev/null 2>&1
 	rc=$?
-	if (( $rc != 0 )); then
+	if (( $rc )); then
 		case $rc in
 			1) err_message="Generic error, usually because invalid command line options or malformed configuration";;
 			2) err_message="Connection failed";;
@@ -133,17 +146,24 @@ else
 		info "SSH connection OK"
 	fi
 	
+	#Generate the backup script to execute on the Raspberry
 	temp_script=$(tempfile -d"${CURRENT_DIR}/tmp" -p"${SERVER}_")
 	
 	echo "bkp_dir=\$(mktemp -d)" > $temp_script
-	echo "mount 192.168.0.90:/export/DATA/Backup \"\$bkp_dir\"" >> $temp_script
+	echo "echo \"TempDir for the backup is : \$bkp_dir\"" > $temp_script
+	echo "mount ${BACKUP_SERVER_IP}:${BACKUP_SERVER_DIR} \"\$bkp_dir\"" >> $temp_script
+	echo "echo \"${BACKUP_SERVER_IP}:${BACKUP_SERVER_DIR} mounted on \$bkp_dir\"" >> $temp_script
 	echo "mkdir -p \$bkp_dir/${SERVER}" >> $temp_script
+	echo "echo \"Backup in progress...\""
 	echo "dd if=/dev/mmcblk0 of=\$bkp_dir/${SERVER}/${TIMESTAMP}.img bs=4M" >> $temp_script
+	echo "echo \"Backup completed!\"" >> $temp_script
+	echo "echo \"Cleaning...\"" >> $temp_script
 	echo "umount \"\$bkp_dir\"" >> $temp_script
-	echo "rmdir \"\$bkp_dir\"" >> $temp_script
+	echo "rmdir -f \"\$bkp_dir\"" >> $temp_script
 	
+	#Execute the backup script on the Raspberry
 	info "Starting backup"
-	cat $temp_script | ssh $SERVER /bin/bash >/dev/null 2>&1
+	cat $temp_script | ssh $SERVER /bin/bash >/dev/null
 	rc=$?
 	if (( $rc != 0 )); then
 		error $LINENO "Backup error."
@@ -153,6 +173,8 @@ else
 		rm $temp_script
 	fi
 	
-	$CURRENT_DIR/pishrink.sh $PISHRINK_OPTS /export/DATA/Backup/$SERVER/$TIMESTAMP.img
+	#Shrinking of the generated image with the given options
+	info "Shrinking"
+	$PISHRINK_DIR/pishrink.sh $PISHRINK_OPTS /export/DATA/Backup/$SERVER/$TIMESTAMP.img
 	
 fi
